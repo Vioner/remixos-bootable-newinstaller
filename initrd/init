@@ -13,6 +13,8 @@
 PATH=/sbin:/bin:/system/bin:/system/xbin; export PATH
 
 # configure debugging output
+# Lets modify this to generate log with this data regardless od DEBUG=X.
+# But with DEBUG=0/"" it shouldn't have set -x
 if [ -n "$DEBUG" ]; then
 	LOG=/tmp/log
 	set -x
@@ -209,7 +211,66 @@ fi
 # ensure keyboard driver is loaded
 [ -n "$INSTALL" -o -n "$DEBUG" ] && busybox modprobe -a atkbd hid-apple
 
+
+# Save native partition path and uuid to files accessible from Android in case if partition is not automounted (often happens, not yet fixed)
+echo $dev > /android/native_partition_path
+blkid $dev | tr -d '"' | sed 's/\=/ /g' | awk '{print $5}' > /android/native_partition_uuid
+echo $SRC > /android/native_partition_remix_dir
+# If booted from removable storage device
+# If any REMIX_OS labeled partition on native boot device found, then set as winfriendly partition path.
+usb_boot_win_partition_path=$(blkid | grep ${dev%?} | grep -m 1 -w 'REMIX_OS' | awk '{print $1}' | sed 's/.$//')
+if [[ -n "$usb_boot_win_partition_path" ]]; then
+	blkid $usb_boot_win_partition_path | tr -d '"' | sed 's/\=/ /g' | awk '{print $5}' > /android/usb_boot_win_partition_uuid 
+	echo $usb_boot_win_partition_path > /android/usb_boot_win_partition_path
+fi
+
+# Log dumper
+# Need to decide log dumping points - when should it dump?
+dump_logs()
+{
+	# Log naming
+	model=$(dmidecode | grep -m 1 "Product Name:" | awk '{print $3}')
+	version=$(cat /system/build.prop | grep remixos.version | cut -d= -f2-)
+	system_arch=$(uname -a | grep -o 'x86\|x86_64' | head -1)
+	dmesg="dmesg_${boot_step}_${model}_${version}_${system_arch}_$(date +%F_%H-%M).txt"
+	lspci="lspci_${boot_step}_${model}_${version}_${system_arch}_$(date +%F_%H-%M).txt"
+	lsusb="lsusb_${boot_step}_${model}_${version}_${system_arch}_$(date +%F_%H-%M).txt"
+	cpuinfo="cpuinfo_${boot_step}_${model}_${version}_${system_arch}_$(date +%F_%H-%M).txt"
+	dmidecode="dmidecode_${boot_step}_${model}_${version}_${system_arch}_$(date +%F_%H-%M).txt"
+	debuglog="debuglog_${boot_step}_${model}_${version}_${system_arch}_$(date +%F_%H-%M).txt"
+	
+	# Make sure storage writable and set logs path
+	mount -o remount,rw /mnt 
+	logs_path="/mnt/$SRC/RemixOS_Logs/Automatic"
+	mkdir -p $logs_path
+	# Remove logs older than 3 days
+	find $logs_path -name "*.txt" -type f  -maxdepth 1 -mtime +3 -delete
+	
+	# Actual dumping 
+	dmesg >  $logs_path/$dmesg
+	lspci > $logs_path/$lspci
+	lsusb > $logs_path/$lsusb
+	dmidecode > $logs_path/$dmidecode
+	cat /proc/cpuinfo > $logs_path/$cpuinfo
+	cat $LOG > $logs_path/$debuglog
+	
+	# COPY LOGS TO WIN FRIENDLY PARTITION IF BOOTED FROM USB
+	if [[ -n "$usb_boot_win_partition_path" ]]; then
+		mkdir -p /usb_boot_win_partition && mount $usb_boot_win_partition_path /usb_boot_win_partition
+		usb_logs_path="/usb_boot_win_partition/RemixOS_Logs/Automatic" && mkdir -p $usb_logs_path	
+		find $usb_logs_path -name "*.txt" -type f  -maxdepth 1 -mtime +3 -delete
+		cp $logs_path/$dmesg $usb_logs_path $logs_path/$lspci $usb_logs_path $logs_path/$lsusb $usb_logs_path $logs_path/$cpuinfo $usb_logs_path $logs_path/$dmidecode $usb_logs_path $logs_path/$debuglog $usb_logs_path 2>/dev/null
+		
+		# Unmount, because otherwise user won't be able to write to that partition once system loads.
+		umount /usb_boot_win_partition
+	fi
+}
+
+
+
 if [ 0$DEBUG -gt 0 ]; then
+	# Dump logs right before DEBUG terminal is accessible by user.
+	boot_step="AT-DEBUG-SHELL" && dump_logs
 	echo -e "\nType 'exit' to continue booting...\n"
 	debug_shell debug-found
 fi
@@ -249,7 +310,8 @@ fi
 echo > /proc/sys/kernel/hotplug
 
 export ANDROID_ROOT=/system
-
+# Dump logs right before attempting to load Android.
+boot_step="END-OF-INIT" && dump_logs
 exec ${SWITCH:-switch_root} /android /init
 
 # avoid kernel panic
