@@ -213,15 +213,18 @@ fi
 
 
 # Save native partition path and uuid to files accessible from Android in case if partition is not automounted (often happens, not yet fixed)
-echo "native_partition_path = $dev" >> boot_info
-echo "native_partition_uuid = "`/system/bin/blkid -s UUID -o value $dev` >> boot_info
-echo "native_partition_remix_dir = $SRC" >> boot_info
+
+# Don't know if this one is mandatory, but won't hurt to add to keep it neat.
+echo '#! /system/bin/sh' >> boot_info
+echo 'native_partition_path="'$dev'"' >> boot_info
+echo 'native_partition_uuid="'`/system/bin/blkid -s UUID -o value $dev`'"' >> boot_info
+echo 'native_partition_remix_dir="'$SRC'"' >> boot_info
 # If booted from removable storage device
 # If any REMIX_OS labeled partition on native boot device found, then set as winfriendly partition path.
 usb_boot_win_partition_path=$(/system/bin/blkid -t LABEL="REMIX_OS" -o device ${dev%?}*)
 if [[ -n "$usb_boot_win_partition_path" ]]; then	
-	echo "usb_boot_win_partition_uuid = "`/system/bin/blkid -s UUID -o value $usb_boot_win_partition_path` >> boot_info
-	echo "usb_boot_win_partition_path = $usb_boot_win_partition_path" >> boot_info
+	echo 'usb_boot_win_partition_uuid="'`/system/bin/blkid -s UUID -o value $usb_boot_win_partition_path`'"' >> boot_info
+	echo 'usb_boot_win_partition_path="'$usb_boot_win_partition_path'"' >> boot_info
 fi
 
 # Log dumper
