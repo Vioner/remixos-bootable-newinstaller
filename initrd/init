@@ -213,15 +213,15 @@ fi
 
 
 # Save native partition path and uuid to files accessible from Android in case if partition is not automounted (often happens, not yet fixed)
-echo $dev > /android/native_partition_path
-blkid $dev | tr -d '"' | sed 's/\=/ /g' | awk '{print $5}' > /android/native_partition_uuid
-echo $SRC > /android/native_partition_remix_dir
+echo "native_partition_path = $dev" >> boot_info
+echo "native_partition_uuid = "`/system/bin/blkid -s UUID -o value $dev` >> boot_info
+echo "native_partition_remix_dir = $SRC" >> boot_info
 # If booted from removable storage device
 # If any REMIX_OS labeled partition on native boot device found, then set as winfriendly partition path.
-usb_boot_win_partition_path=$(blkid | grep ${dev%?} | grep -m 1 -w 'REMIX_OS' | awk '{print $1}' | sed 's/.$//')
-if [[ -n "$usb_boot_win_partition_path" ]]; then
-	blkid $usb_boot_win_partition_path | tr -d '"' | sed 's/\=/ /g' | awk '{print $5}' > /android/usb_boot_win_partition_uuid 
-	echo $usb_boot_win_partition_path > /android/usb_boot_win_partition_path
+usb_boot_win_partition_path=$(/system/bin/blkid -t LABEL="REMIX_OS" -o device ${dev%?}*)
+if [[ -n "$usb_boot_win_partition_path" ]]; then	
+	echo "usb_boot_win_partition_uuid = "`/system/bin/blkid -s UUID -o value $usb_boot_win_partition_path` >> boot_info
+	echo "usb_boot_win_partition_path = $usb_boot_win_partition_path" >> boot_info
 fi
 
 # Log dumper
@@ -260,7 +260,6 @@ dump_logs()
 		usb_logs_path="/usb_boot_win_partition/RemixOS_Logs/Automatic" && mkdir -p $usb_logs_path	
 		find $usb_logs_path -name "*.txt" -type f  -maxdepth 1 -mtime +3 -delete
 		cp $logs_path/$dmesg $usb_logs_path $logs_path/$lspci $usb_logs_path $logs_path/$lsusb $usb_logs_path $logs_path/$cpuinfo $usb_logs_path $logs_path/$dmidecode $usb_logs_path $logs_path/$debuglog $usb_logs_path 2>/dev/null
-		
 		# Unmount, because otherwise user won't be able to write to that partition once system loads.
 		umount /usb_boot_win_partition
 	fi
