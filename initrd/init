@@ -235,6 +235,7 @@ dump_logs()
 	model=$(dmidecode | grep -m 1 "Product Name:" | awk '{print $3}')
 	version=$(cat /system/build.prop | grep remixos.version | cut -d= -f2-)
 	system_arch=$(uname -a | grep -o 'x86\|x86_64' | head -1)
+	
 	dmesg="dmesg_${boot_step}_${model}_${version}_${system_arch}_$(date +%F_%H-%M).txt"
 	lspci="lspci_${boot_step}_${model}_${version}_${system_arch}_$(date +%F_%H-%M).txt"
 	lsusb="lsusb_${boot_step}_${model}_${version}_${system_arch}_$(date +%F_%H-%M).txt"
@@ -244,10 +245,12 @@ dump_logs()
 	
 	# Make sure storage writable and set logs path
 	mount -o remount,rw /mnt 
-	logs_path="/mnt/$SRC/RemixOS_Logs/Automatic"
-	mkdir -p $logs_path
-	# Remove logs older than 3 days
-	find $logs_path -name "*.txt" -type f  -maxdepth 1 -mtime +3 -delete
+	logs_src="/mnt/$SRC/RemixOS_Logs/Automatic"
+	logs_path="$logs_src/$model/$boot_step" && mkdir -p $logs_path
+	# Delete all automatically generated logs older than 14 days
+	find $logs_src -type f -mtime +14 -delete
+	# Remove all logs in folder except for 12 most recent (2 of each log type)
+	ls -dt $logs_path/* | tail -n +13 | xargs rm -rf > /dev/null
 	
 	# Actual dumping 
 	dmesg >  $logs_path/$dmesg
@@ -260,8 +263,10 @@ dump_logs()
 	# COPY LOGS TO WIN FRIENDLY PARTITION IF BOOTED FROM USB
 	if [[ -n "$usb_boot_win_partition_path" ]]; then
 		mkdir -p /usb_boot_win_partition && mount $usb_boot_win_partition_path /usb_boot_win_partition
-		usb_logs_path="/usb_boot_win_partition/RemixOS_Logs/Automatic" && mkdir -p $usb_logs_path	
-		find $usb_logs_path -name "*.txt" -type f  -maxdepth 1 -mtime +3 -delete
+		usb_logs_src="/usb_boot_win_partition/RemixOS_Logs/Automatic"
+		usb_logs_path="/$usb_logs_src/$model/$boot_step" && mkdir -p $usb_logs_path	
+		find $usb_logs_src -type f -mtime +14 -delete
+		ls -dt $usb_logs_path/* | tail -n +13 | xargs rm -rf > /dev/null
 		cp $logs_path/$dmesg $usb_logs_path $logs_path/$lspci $usb_logs_path $logs_path/$lsusb $usb_logs_path $logs_path/$cpuinfo $usb_logs_path $logs_path/$dmidecode $usb_logs_path $logs_path/$debuglog $usb_logs_path 2>/dev/null
 		# Unmount, because otherwise user won't be able to write to that partition once system loads.
 		umount /usb_boot_win_partition
@@ -272,7 +277,7 @@ dump_logs()
 
 if [ 0$DEBUG -gt 0 ]; then
 	# Dump logs right before DEBUG terminal is accessible by user.
-	boot_step="AT-DEBUG-SHELL" && dump_logs
+	boot_step="AT-DEBUG-CLI" && dump_logs
 	echo -e "\nType 'exit' to continue booting...\n"
 	debug_shell debug-found
 fi
