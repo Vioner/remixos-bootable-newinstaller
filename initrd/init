@@ -212,10 +212,8 @@ fi
 [ -n "$INSTALL" -o -n "$DEBUG" ] && busybox modprobe -a atkbd hid-apple
 
 
-# Save native partition path and uuid to files accessible from Android in case if partition is not automounted (often happens, not yet fixed)
-
-# Don't know if this one is mandatory, but won't hurt to add to keep it neat.
-echo '#! /system/bin/sh' >> boot_info
+# Save some important, useful boot info for the Android log dumping script and more
+echo '#!/system/bin/sh' >> boot_info
 echo 'DEBUG="'$DEBUG'"' >> boot_info
 echo 'SAVE_LOGS="'$SAVE_LOGS'"' >> boot_info
 echo 'DATA_IN_MEM="'$DATA_IN_MEM'"' >> boot_info
@@ -224,10 +222,10 @@ echo 'native_partition_uuid="'`/system/bin/blkid -s UUID -o value $dev`'"' >> bo
 echo 'native_partition_remix_dir="'$SRC'"' >> boot_info
 # If booted from removable storage device
 # If any REMIX_OS labeled partition on native boot device found, then set as winfriendly partition path.
-usb_boot_win_partition_path=$(/system/bin/blkid -t LABEL="REMIX_OS" -o device ${dev%?}*)
-if [[ -n "$usb_boot_win_partition_path" ]]; then	
-	echo 'usb_boot_win_partition_uuid="'`/system/bin/blkid -s UUID -o value $usb_boot_win_partition_path`'"' >> boot_info
-	echo 'usb_boot_win_partition_path="'$usb_boot_win_partition_path'"' >> boot_info
+removable_boot_win_partition_path=$(/system/bin/blkid -t LABEL="REMIX_OS" -o device ${dev%?}*)
+if [[ -n "$removable_boot_win_partition_path" ]]; then	
+	echo 'removable_boot_win_partition_path="'$removable_boot_win_partition_path'"' >> boot_info
+	echo 'removable_boot_win_partition_uuid="'`/system/bin/blkid -s UUID -o value $removable_boot_win_partition_path`'"' >> boot_info
 fi
 
 # Log dumper
@@ -235,10 +233,11 @@ fi
 dump_logs()
 {
 	if [[ -n "$DEBUG" || -n "$SAVE_LOGS" ]]; then
+		boot_step=$1
 		# Log naming
-		model=$(dmidecode | grep -m 1 "Product Name:" | awk '{print $3}')
-		version=$(cat /system/build.prop | grep remixos.version | cut -d= -f2-)
-		system_arch=$(uname -a | grep -o 'x86\|x86_64' | head -1)
+		model=$(dmidecode -s system-product-name) && model=${model// /-} 
+		version=$(cat /system/build.prop | grep remixos.version | cut -d= -f2-) && version=${version// /-}
+		system_arch=$(uname -a | grep -o 'x86\|x86_64' | head -1) && system_arch=${system_arch// /-}
 		
 		dmesg="dmesg_${boot_step}_${model}_${version}_${system_arch}_$(date +%F_%H-%M).txt"
 		lspci="lspci_${boot_step}_${model}_${version}_${system_arch}_$(date +%F_%H-%M).txt"
@@ -264,26 +263,29 @@ dump_logs()
 		cat /proc/cpuinfo > $logs_path/$cpuinfo
 		cat $LOG > $logs_path/$debuglog
 		
-		# COPY LOGS TO WIN FRIENDLY PARTITION IF BOOTED FROM USB
-		if [[ -n "$usb_boot_win_partition_path" ]]; then
-			mkdir -p /usb_boot_win_partition && mount $usb_boot_win_partition_path /usb_boot_win_partition
-			usb_logs_src="/usb_boot_win_partition/RemixOS_Logs/Automatic"
-			usb_logs_path="$usb_logs_src/$model/$boot_step" && mkdir -p $usb_logs_path	
-			find $usb_logs_src -type f -mtime +14 -delete
-			ls -dt $usb_logs_path/* | tail -n +13 | xargs rm -rf > /dev/null
-			cp $logs_path/$dmesg $usb_logs_path $logs_path/$lspci $usb_logs_path $logs_path/$lsusb $usb_logs_path $logs_path/$cpuinfo $usb_logs_path $logs_path/$dmidecode $usb_logs_path $logs_path/$debuglog $usb_logs_path 2>/dev/null
+		# COPY LOGS TO WIN FRIENDLY PARTITION IF BOOTED FROM REMOVABLE MEDIA
+		if [[ -n "$removable_boot_win_partition_path" ]]; then
+			mkdir -p /removable_boot_win_partition && mount $removable_boot_win_partition_path /removable_boot_win_partition
+			removable_logs_src="/removable_boot_win_partition/RemixOS_Logs/Automatic"
+			removable_logs_path="$removable_logs_src/$model/$boot_step" && mkdir -p $removable_logs_path	
+			find $removable_logs_src -type f -mtime +14 -delete
+			ls -dt $removable_logs_path/* | tail -n +13 | xargs rm -rf > /dev/null
+			cp $logs_path/$dmesg $removable_logs_path $logs_path/$lspci $removable_logs_path $logs_path/$lsusb $removable_logs_path $logs_path/$cpuinfo $removable_logs_path $logs_path/$dmidecode $removable_logs_path $logs_path/$debuglog $removable_logs_path
 			# Unmount, because otherwise user won't be able to write to that partition once system loads.
-			umount /usb_boot_win_partition
+			umount /removable_boot_win_partition
+		fi
+		if [ 0$DEBUG -gt 0 ]; then
+			echo -e "\n\nAll logs and hardware info for booting up to this point were saved to:\n\n1. Native partition (where you installed OS) in dir:\n$SRC/RemixOS_Logs/Automatic\nFull path for DEBUG environment:\n$logs_path"
+			[ -n "$removable_boot_win_partition_path" ] && echo -e '\n2. "REMIX_OS" Windows friendly partition in dir:\nRemixOS_Logs/Automatic'
+			echo -e "\nMore logs for further boot steps will be saved after you exit this environment.\nThis logs session is retained along with 2 other recent sessions until manual or automatic removal.\nWhen logs older then 14 days are found - they are deleted."
 		fi
 	fi
 }
 
-
-
 if [ 0$DEBUG -gt 0 ]; then
 	# Dump logs right before DEBUG terminal is accessible by user.
-	boot_step="AT-DEBUG-CLI" && dump_logs
-	echo -e "\nType 'exit' to continue booting...\n"
+	dump_logs "AT-DEBUG-CLI"
+	echo -e "\nTo scroll, use Shift + PgUp/PgDn\n\nEnter 'exit' to continue booting...\n"
 	debug_shell debug-found
 fi
 
@@ -322,8 +324,10 @@ fi
 echo > /proc/sys/kernel/hotplug
 
 export ANDROID_ROOT=/system
+
 # Dump logs right before attempting to load Android.
-boot_step="END-OF-INIT" && dump_logs
+dump_logs "END-OF-INIT"
+
 exec ${SWITCH:-switch_root} /android /init
 
 # avoid kernel panic
