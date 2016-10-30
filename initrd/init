@@ -235,16 +235,17 @@ dump_logs()
 	if [[ -n "$DEBUG" || -n "$SAVE_LOGS" ]]; then
 		boot_step=$1
 		# Log naming
+		brand=$(dmidecode -s system-manufacturer) && brand=${brand// /-} 
 		model=$(dmidecode -s system-product-name) && model=${model// /-} 
 		version=$(cat /system/build.prop | grep remixos.version | cut -d= -f2-) && version=${version// /-}
 		system_arch=$(uname -a | grep -o 'x86\|x86_64' | head -1) && system_arch=${system_arch// /-}
 		
-		dmesg="dmesg_${boot_step}_${model}_${version}_${system_arch}_$(date +%F_%H-%M).txt"
-		lspci="lspci_${boot_step}_${model}_${version}_${system_arch}_$(date +%F_%H-%M).txt"
-		lsusb="lsusb_${boot_step}_${model}_${version}_${system_arch}_$(date +%F_%H-%M).txt"
-		cpuinfo="cpuinfo_${boot_step}_${model}_${version}_${system_arch}_$(date +%F_%H-%M).txt"
-		dmidecode="dmidecode_${boot_step}_${model}_${version}_${system_arch}_$(date +%F_%H-%M).txt"
-		debuglog="debuglog_${boot_step}_${model}_${version}_${system_arch}_$(date +%F_%H-%M).txt"
+		dmesg="dmesg_${boot_step}_${brand}_${model}_${version}_${system_arch}_$(date +%F_%H-%M).txt"
+		lspci="lspci_${boot_step}_${brand}_${model}_${version}_${system_arch}_$(date +%F_%H-%M).txt"
+		lsusb="lsusb_${boot_step}_${brand}_${model}_${version}_${system_arch}_$(date +%F_%H-%M).txt"
+		cpuinfo="cpuinfo_${boot_step}_${brand}_${model}_${version}_${system_arch}_$(date +%F_%H-%M).txt"
+		dmidecode="dmidecode_${boot_step}_${brand}_${model}_${version}_${system_arch}_$(date +%F_%H-%M).txt"
+		debuglog="debuglog_${boot_step}_${brand}_${model}_${version}_${system_arch}_$(date +%F_%H-%M).txt"
 		
 		# Make sure storage writable and set logs path
 		mount -o remount,rw /mnt 
