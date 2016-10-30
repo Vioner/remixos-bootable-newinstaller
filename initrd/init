@@ -250,7 +250,7 @@ dump_logs()
 		# Make sure storage writable and set logs path
 		mount -o remount,rw /mnt 
 		logs_src="/mnt/$SRC/RemixOS_Logs/Automatic"
-		logs_path="$logs_src/$model/$boot_step" && mkdir -p $logs_path
+		logs_path="$logs_src/$brand_$model/$boot_step" && mkdir -p $logs_path
 		# Delete all automatically generated logs older than 14 days, no matter the device or boot_step
 		find $logs_src -type f -mtime +14 -delete
 		# Remove all logs in folder except for 12 most recent (2 of each log type)
@@ -268,7 +268,7 @@ dump_logs()
 		if [[ -n "$removable_boot_win_partition_path" ]]; then
 			mkdir -p /removable_boot_win_partition && mount $removable_boot_win_partition_path /removable_boot_win_partition
 			removable_logs_src="/removable_boot_win_partition/RemixOS_Logs/Automatic"
-			removable_logs_path="$removable_logs_src/$model/$boot_step" && mkdir -p $removable_logs_path	
+			removable_logs_path="$removable_logs_src/$brand_$model/$boot_step" && mkdir -p $removable_logs_path	
 			find $removable_logs_src -type f -mtime +14 -delete
 			ls -dt $removable_logs_path/* | tail -n +13 | xargs rm -rf > /dev/null
 			cp $logs_path/$dmesg $removable_logs_path $logs_path/$lspci $removable_logs_path $logs_path/$lsusb $removable_logs_path $logs_path/$cpuinfo $removable_logs_path $logs_path/$dmidecode $removable_logs_path $logs_path/$debuglog $removable_logs_path
