@@ -1,6 +1,7 @@
 #
 # By Chih-Wei Huang <cwhuang@linux.org.tw>
-# Last updated 2016/07/21
+# and Karol Putra <karol.putra@gmail.com>
+# Last updated 2016/12/02
 #
 # License: GNU Public License
 # We explicitely grant the right to use the scripts
@@ -23,7 +24,7 @@ rebooting()
 choose()
 {
 	dialog --clear --title " $1 " \
-		--menu "$2" 20 71 13 --file $menufile 2> $tempfile
+		--menu "$2" 20 100 13 --file $menufile 2> $tempfile
 
 	retval=$?
 	choice=`cat $tempfile`
@@ -78,31 +79,96 @@ partition_drive()
 select_dev()
 {
 	blkid | grep -v -E "^/dev/block/|^/dev/loop" | cut -b6- | sort | awk '{
-		t="unknown"
-		for (i = NF; i > 1; --i)
-			if (match($i, "^TYPE")) {
-				t=$i
-				break
-			}
-		gsub(/TYPE=|"/, "", t)
-		printf("%s\t%s\n", $1, t)
-	}' > $tempfile
-
+        t="unknown"
+        for (i = NF; i > 1; --i)
+            if (match($i, "^TYPE")) {
+                t=$i
+                break
+            }
+        gsub(/TYPE=|"/, "", t)
+        printf("%s\t%s\n", $1, t)
+    }' > $tempfile
+    
+	printf "\"Create/Modify partitions\" \"\"\n\"Detect devices\" \"\"\n\"\" \"\"\n" > $menufile
 	lsblk=`ls /sys/block | grep -v -E "loop|ram|sr|boot|rpmb"`
 	for d in $lsblk; do
 		for i in /sys/block/$d/$d*; do
 			echo $i | grep -q -E "boot|rpmb" && continue
-			[ -d $i ] && ( grep "`basename $i:`" $tempfile || echo "`basename $i` unknown" )
-		done
-	done | awk '{
-		sub(/:/, "", $1)
-		printf("\"%-13s%-17s", $1, $2)
-		system("cd /sys/block; for f in "$1"/device/model "$1"/device/name */"$1"/../device/model */"$1"/../device/name; do [ -e $f ] && echo -n `cat $f` && break; done")
-		printf("\" \"\"\n")
-	} END {
-		printf("\"Create/Modify partitions\" \"\"\n\"Detect devices\" \"\"")
-	}' > $menufile
-	choose "Choose Partition" "Please select a partition to install Android-x86:"
+			    if [ -d $i ]; then
+				print_partition_info()
+				{
+					partition=$1
+					intempfile=$(grep "$partition:" $tempfile)
+					# LINUXPART
+					printf "%-13s" $partition
+		
+					#Filesystem
+					if [ "$intempfile" ];then
+						fstype=$(echo $intempfile | awk '{print $2}')
+						printf "%-13s" $fstype
+					else
+						printf "%-13s" unknown
+					fi
+					#LABEL - czy head -1 potrzebny?
+					label=$(/system/bin/blkid -s LABEL -o value /dev/*$partition | head -1)
+					if [ "$label" ];then
+						printf "%-15s " "$label"
+					else
+						printf "%-15s " "  --- "
+					fi
+
+					#FREE SPACE
+					tempmount=/tmp/tempmount
+					mkdir -p $tempmount
+					mount /dev/*$partition $tempmount 2>/dev/null
+					ntfs-3g /dev/*$partition $tempmount 2>/dev/null
+					mounted=$(df | grep -w $tempmount)
+
+					if [ "$mounted" ]; then
+						free=`df -k $tempmount | tail -1 | awk '{print $4}'`
+						umount $tempmount 2>/dev/null
+						free_gb_long=`dc $free 1048576 div p`
+						free_gb_short=`printf "%0.2fGB" $free_gb_long`
+						if [ "$free_gb_short" = "0.00GB" ]; then
+							printf "%9s " "<0.01GB"
+						else
+							printf "%9s " $free_gb_short
+						fi
+					else
+						umount $tempmount 2>/dev/null
+						printf "%9s " unknown
+					fi
+					
+					#SIZE
+						size=$(cat /sys/block/*/$partition/size)
+					if [ $size ]; then
+						size_gb_long=$(dc $size 2097152 div p)
+						size_gb_short=$(printf "%0.2fGB" $size_gb_long)
+						if [ "$size_gb_short" = "0.00GB" ]; then
+							printf "%9s " "<0.01GB"
+						else
+							printf "%9s " $size_gb_short
+						fi
+					else
+						printf "%9s " "??"
+					fi
+					#DEVICE MODEL OR NAME
+					cd /sys/block
+					for f in "$partition"/device/model "$partition"/device/name */"$partition"/../device/model */"$partition"/../device/name; do
+						[ -e $f ] && model_name=`cat $f | sed $'s/\x04//g'` && printf "%-15s" "$model_name" && break
+					done	
+				}
+				partition=$(basename $i)
+				#Begin menuentry
+				printf "\""
+				#Fill in data - reorderable in function
+				print_partition_info $partition
+				#End menuentry
+				printf "\" \"\"\n"
+			fi
+		done && printf "\"\" \"\"\n" >> $menufile
+	done >> $menufile
+	choose "Remix OS Installer" " Remix OS requires at least XGB of disk space\nSelect partition for Remix OS\n\n Partition ID | Filesystem | Label | Free space | Size | Drive name/model"
 	return $retval
 }
 
@@ -239,7 +305,7 @@ create_data_img()
 try_upgrade()
 {
 	[ -d $1 ] && return
-	PREV_VERS="6.0-rc1 5.1-rc1 4.4-r5 4.4-r4 4.4-r3 4.4-r2 4.4-r1 4.4-RC2 4.4-RC1 4.4-test 4.3-test 4.2-test 4.0-r1 4.0-RC2 4.0-RC1"
+	PREV_VERS="6.0-r1 6.0-rc2 6.0-rc1 5.1-rc1 4.4-r5 4.4-r4 4.4-r3 4.4-r2 4.4-r1 4.4-RC2 4.4-RC1 4.4-test 4.3-test 4.2-test 4.0-r1 4.0-RC2 4.0-RC1"
 	for v in $PREV_VERS; do
 		prev=hd/android-$v
 		if [ -d $prev ]; then
@@ -282,10 +348,11 @@ install_to()
 	done
 
 	fs=`cat /proc/mounts | grep /dev/$1 | awk '{ print $3 }'`
-	cmdline=`sed "s|\(initrd.*img\s*\)||; s|quiet\s*||; s|\(vga=\w\+\?\s*\)||; s|\(DPI=\w\+\?\s*\)||; s|\(INSTALL=\w\+\?\s*\)||; s|\(SRC=\S\+\?\s*\)||; s|\(DEBUG=\w\+\?\s*\)||; s|\(BOOT_IMAGE=\S\+\?\s*\)||; s|CREATE_DATA_IMG=1||; s|DATA_IN_MEM=1||" /proc/cmdline`
+	cmdline=`sed "s|\(initrd.*img\s*\)||; s|quiet\s*||; s|\(vga=\w\+\?\s*\)||; s|\(DPI=\w\+\?\s*\)||; s|\(INSTALL=\w\+\?\s*\)||; s|\(SRC=\S\+\?\s*\)||; s|\(DEBUG=\w\+\?\s*\)||; s|\(BOOT_IMAGE=\S\+\?\s*\)||; s|\(iso-scan/filename=\S\+\?\s*\)||; s|CREATE_DATA_IMG=1||; s|DATA_IN_MEM=1||" /proc/cmdline`
 
-	asrc=RemixOS
-	dialog --title " Confirm " --no-label Skip --defaultno --yesno \
+	[ -n "$INSTALL_PREFIX" ] && asrc=$INSTALL_PREFIX || asrc=RemixOS
+	efi="`dmesg | grep EFI.VGA`"
+	[ -z "$efi" ] && dialog --title " Confirm " --no-label Skip --defaultno --yesno \
 		"\n Do you want to install boot loader GRUB?" 7 47
 	if [ $? -eq 0 ]; then
 		cp -af /grub /hd
@@ -299,7 +366,7 @@ install_to()
 		[ $? -ne 0 ] && return 255
 	fi
 
-	dialog --title " Confirm " --no-label Skip --defaultno --yesno \
+	[ -n "$efi" ] && dialog --title " Confirm " --no-label Skip --defaultno --yesno \
 		"\n Do you want to install EFI GRUB2?" 7 39
 	if [ $? -eq 0 ]; then
 		get_part_info $1
@@ -331,7 +398,7 @@ install_to()
 		try_mount rw /dev/$1 /hd
 	fi
 
-	dialog --title " Question " --yesno \
+	dialog --title " Question " --defaultno --yesno \
 		"\nDo you want to install /system directory as read-write?\n\nMaking /system be read-write is easier for debugging, but it needs more disk space and longer installation time." 10 61
 	instal_rw=$?
 
@@ -388,6 +455,7 @@ install_hd()
 	select_dev || rebooting
 	retval=1
 	case "$choice" in
+	#this enforces use of partname as first column in the menufile
 		[shvm][dm]*)
 			install_to $choice
 			retval=$?
