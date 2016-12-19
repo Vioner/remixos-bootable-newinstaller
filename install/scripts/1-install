@@ -1,6 +1,7 @@
 #
 # By Chih-Wei Huang <cwhuang@linux.org.tw>
-# Last updated 2016/07/21
+# and Karol Putra <karol.putra@gmail.com>
+# Last updated 2016/12/19
 #
 # License: GNU Public License
 # We explicitely grant the right to use the scripts
@@ -23,7 +24,7 @@ rebooting()
 choose()
 {
 	dialog --clear --title " $1 " \
-		--menu "$2" 20 71 13 --file $menufile 2> $tempfile
+		--menu "$2" 20 90 13 --file $menufile 2> $tempfile
 
 	retval=$?
 	choice=`cat $tempfile`
@@ -43,9 +44,21 @@ partition_drive()
 			echo -n ' "Removable' >> $menufile
 		fi
 		if [ -f $i/size ]; then
-			echo -n " (" `cat $i/size` "blocks)" >> $menufile
+			size=$(cat $i/size)
+			size_gb=`printf "%0.2fGB" $(dc $size 2097152 div p)`
+				if [ "$size_gb" = "0.00GB" ]; then
+						printf " %9s" " <0.01GB" >> $menufile
+					else
+						printf " %9s" $size_gb >> $menufile
+				fi
 		fi
+		cd /sys/block
+		for f in "$i"/device/model "$i"/device/name */"$i"/../device/model */"$i"/../device/name; do
+			[ -e $f ] && model_name=`cat $f | sed $'s/\x04//g'` && echo -n " ${model_name}" >> $menufile && break
+		done
+		[ `basename $i` = "${booted_from%?}" ] && echo -n " INSTALLER SOURCE!" >> $menufile
 		echo '"' >> $menufile
+		cd /
 	done
 	count=`wc -l $menufile | awk '{ print $1 }'`
 	if [ $count -eq 0 ]; then
@@ -75,6 +88,54 @@ partition_drive()
 	return $retval
 }
 
+print_partition_info()
+{
+	partition=$1
+	printf "%-10s " $partition
+	
+	# Filesystem
+	intempfile=$(grep "$partition:" $tempfile)
+	if [ "$intempfile" ];then
+		fstype=$(echo $intempfile | awk '{print $2}')
+		printf "%-10s " $fstype
+	else
+		printf "%-10s " unknown
+	fi
+	
+	# Label
+	label=$(blkid /dev/$partition | sed -n 's/.* LABEL=\"\([^\"]*\)\".*/\1/p')
+	if [ "$label" ];then
+		printf "%-15s " "$label"
+	else
+		printf "%-15s " "  --- "
+	fi
+
+	# Free space & full space
+	tempmount=/tmp/tempmount
+	mkdir -p $tempmount
+	ntfs-3g /dev/*$partition $tempmount 2>/dev/null
+	mount /dev/*$partition $tempmount 2>/dev/null
+	mounted=$(df | grep -w $tempmount)
+	if [ "$mounted" ]; then
+		space_info=`df -m $tempmount | tail -1`
+		umount $tempmount 2>/dev/null
+		free_space=`echo $space_info | awk '{print $4}'`
+		full_space=`echo $space_info | awk '{print $2}'`
+		free_gb=`printf "%0.2fGB" $(dc $free_space 1024 div p)`
+		full_gb=`printf "%0.2fGB" $(dc $full_space 1024 div p)`
+		printf "%9s " $free_gb $full_gb
+	else
+		umount $tempmount 2>/dev/null
+		printf "%9s " unknown unknown
+	fi
+	
+	# DEVICE MODEL OR NAME
+	cd /sys/block
+	for f in "$partition"/device/model "$partition"/device/name */"$partition"/../device/model */"$partition"/../device/name; do
+		[ -e $f ] && model_name=`cat $f | sed $'s/\x04//g'` && printf "%-15s" "$model_name" && break
+	done	
+}
+
 select_dev()
 {
 	blkid | grep -v -E "^/dev/block/|^/dev/loop" | cut -b6- | sort | awk '{
@@ -87,22 +148,30 @@ select_dev()
 		gsub(/TYPE=|"/, "", t)
 		printf("%s\t%s\n", $1, t)
 	}' > $tempfile
-
+    
+	printf "\"Create/Modify partitions\" \"\"\n\"Detect devices\" \"\"\n\"\" \"\"\n" > $menufile
 	lsblk=`ls /sys/block | grep -v -E "loop|ram|sr|boot|rpmb"`
+	booted_from=`basename $dev`
 	for d in $lsblk; do
 		for i in /sys/block/$d/$d*; do
-			echo $i | grep -q -E "boot|rpmb" && continue
-			[ -d $i ] && ( grep "`basename $i:`" $tempfile || echo "`basename $i` unknown" )
-		done
-	done | awk '{
-		sub(/:/, "", $1)
-		printf("\"%-13s%-17s", $1, $2)
-		system("cd /sys/block; for f in "$1"/device/model "$1"/device/name */"$1"/../device/model */"$1"/../device/name; do [ -e $f ] && echo -n `cat $f` && break; done")
-		printf("\" \"\"\n")
-	} END {
-		printf("\"Create/Modify partitions\" \"\"\n\"Detect devices\" \"\"")
-	}' > $menufile
-	choose "Choose Partition" "Please select a partition to install Android-x86:"
+			same_as_boot=`echo $i | grep "$booted_from"`
+			qualified=$(cat $i/size)
+			[ 0$qualified -eq 0 ] && continue
+			echo $i | grep -q -E "boot|rpmb|$booted_from" && continue
+			    if [ -d $i ]; then
+					partition=$(basename $i)
+					#Begin menuentry
+					printf "\""
+					#Fill in data - reorderable in function
+					print_partition_info $partition
+					#End menuentry
+					printf "\" \"\"\n"
+				fi
+		done && [ -z "$same_as_boot" ] && [ "$qualified" ] && printf "\"\" \"\"\n" >> $menufile
+	done >> $menufile
+	# CHECK HERE:
+	# Should we add a space requirements calculator? Having in mind free space for OTA and data image/partition
+	choose "Remix OS Installer" " Remix OS requires at least 5GB of disk space. 8GB recommended.\n Select partition for Remix OS or use one of available options:\n\n Partition | Filesystem | Label | Free space | Size | Drive name/model"
 	return $retval
 }
 
@@ -145,35 +214,16 @@ format_fs()
 		dialog --title " Confirm " --defaultno --yesno \
 			"\n You chose to format $1 to $choice.\n All data in that partition will LOSE.\n\n Are you sure to format the partition $1?" 10 51
 		[ $? -ne 0 ] && return 1
-		$cmd Android-x86 /dev/$1 | awk '{
+		$cmd RemixOS /dev/$1 | awk '{
 			# FIXME: very imprecise progress
 			if (match($0, "done"))
 				printf("%d\n", i+=33)
 		}' | progress_bar "Formatting" "Formatting partition $1..."
 	elif blkid /dev/$1 | grep -q ext[23]; then
 		dialog --clear --title " Warning " --yesno \
-			"\nYou chose to install android-x86 to an ext2/3 filesystem. We suggest you convert it to ext4 for better reliability and performance." 9 62
+			"\nYou chose to install Remix OS to an ext2/3 filesystem. We suggest you convert it to ext4 for better reliability and performance." 9 62
 		[ $? -eq 0 ] && convert_fs $1
 	fi
-}
-
-create_entry()
-{
-	title=$1
-	shift
-	echo -e "title $title\n\tkernel /$asrc/kernel$vga $@ SRC=/$asrc\n\tinitrd /$asrc/initrd.img\n" >> $menulst
-}
-
-create_menulst()
-{
-	menulst=/hd/grub/menu.lst
-	[ -n "$VESA" ] && vga=" vga=788 modeset=0"
-	echo -e "${GRUB_OPTIONS:-default=0\ntimeout=6\nsplashimage=/grub/android-x86.xpm.gz\n}root (hd0,$1)\n" > $menulst
-
-	create_entry "Remix OS $VER" quiet $cmdline
-	create_entry "Remix OS $VER (Debug mode)" $cmdline DEBUG=2
-	create_entry "Remix OS $VER (Debug nomodeset)" nomodeset $cmdline DEBUG=2
-	create_entry "Remix OS $VER (Debug video=LVDS-1:d)" video=LVDS-1:d $cmdline DEBUG=2
 }
 
 create_winitem()
@@ -187,7 +237,7 @@ create_winitem()
 			"\nThe installer found a Windows partition in /dev/$win.\n\nDo you want to create a boot item for Windows?" 9 59
 		[ $? -ne 0 ] && return 1
 		wp=$((`echo $win | cut -b4-`-1))
-		echo -e "title Windows\n\trootnoverify (hd$d,$wp)\n\tchainloader +1\n" >> $menulst
+		echo -e "\ntitle Windows\n\trootnoverify (hd$d,$wp)\n\tchainloader +1\n" >> $menulst
 	fi
 }
 
@@ -222,37 +272,18 @@ create_img()
 create_data_img()
 {
 	dialog --title " Confirm " --yesno \
-		"\nThe installer is going to create a disk image to save the user data. At least 512MB free disk space is recommended.\n\nAre you sure to create the image?" 11 62
+		"\nThe installer is going to create a disk image to save the user data. At least 1024MB free disk space is recommended.\n\nAre you sure to create the image?" 11 62
 
 	if [ $? -eq 0 ]; then
-		if create_img 512 data.img; then
+		if create_img 1024 data.img; then
 			losetup /dev/loop6 data.img
 			make_ext4fs -L /data /dev/loop6 > /dev/tty6
 		fi
 		[ $? -ne 0 ] && dialog --msgbox "\n Failed to create data.img." 7 33
 	else
 		dialog --title " Warning " --msgbox \
-			"\nOK. So data will be save to a RAMDISK(tmpfs), and lose after power off." 8 49
+			"\nUser data will be saved to RAM and lost upon power off." 8 49
 	fi
-}
-
-try_upgrade()
-{
-	[ -d $1 ] && return
-	PREV_VERS="6.0-r1 6.0-rc2 6.0-rc1 5.1-rc1 4.4-r5 4.4-r4 4.4-r3 4.4-r2 4.4-r1 4.4-RC2 4.4-RC1 4.4-test 4.3-test 4.2-test 4.0-r1 4.0-RC2 4.0-RC1"
-	for v in $PREV_VERS; do
-		prev=hd/android-$v
-		if [ -d $prev ]; then
-			dialog --title " Question " --yesno \
-				"\nAn older Android-x86 version $v is detected.\nWould you like to upgrade it?" 8 55
-			if [ $? -eq 0 ]; then
-				mv $prev $1
-				rm -rf $1/data/dalvik-cache/* $1/data/system/wpa_supplicant
-				sed -i 's/\(ctrl_interface=\)\(.*\)/\1wlan0/' $1/data/misc/wifi/wpa_supplicant.conf
-				break
-			fi
-		fi
-	done
 }
 
 get_part_info()
@@ -265,7 +296,7 @@ get_part_info()
 		done
 		d=$(($d+1))
 	done
-	p=`cat $part/partition`
+	p=`cat $part/partition` && p=$((p-1))
 	disk=$(basename `dirname $part`)
 }
 
@@ -282,56 +313,84 @@ install_to()
 	done
 
 	fs=`cat /proc/mounts | grep /dev/$1 | awk '{ print $3 }'`
-	cmdline=`sed "s|\(initrd.*img\s*\)||; s|quiet\s*||; s|\(vga=\w\+\?\s*\)||; s|\(DPI=\w\+\?\s*\)||; s|\(INSTALL=\w\+\?\s*\)||; s|\(SRC=\S\+\?\s*\)||; s|\(DEBUG=\w\+\?\s*\)||; s|\(BOOT_IMAGE=\S\+\?\s*\)||; s|\(iso-scan/filename=\S\+\?\s*\)||; s|CREATE_DATA_IMG=1||; s|DATA_IN_MEM=1||" /proc/cmdline`
 
 	[ -n "$INSTALL_PREFIX" ] && asrc=$INSTALL_PREFIX || asrc=RemixOS
-	efi="`dmesg | grep EFI.VGA`"
+	[ -d /sys/firmware/efi ] && efi="1"
 	[ -z "$efi" ] && dialog --title " Confirm " --no-label Skip --defaultno --yesno \
 		"\n Do you want to install boot loader GRUB?" 7 47
-	if [ $? -eq 0 ]; then
-		cp -af /grub /hd
-		get_part_info $1
-		p=$(($p-1))
-		create_menulst $p
-		create_winitem $1 $d
-		rm -f /hd/boot/grub/stage1
-		echo "(hd$d) /dev/$disk" > /hd/grub/device.map
-		echo "setup (hd$d) (hd$d,$p)" | grub --device-map /hd/grub/device.map > /dev/tty5
-		[ $? -ne 0 ] && return 255
-	fi
+		if [ $? -eq 0 ]; then
+			get_part_info $1
+			for i in /sys/block/$disk/$disk*; do
+				[ 0`cat $i/partition` -eq 1 ] && b=$i
+				[ $(fdisk -l | grep -w `basename $i` | grep -c "*") -ne 0 ] && b=$i && break
+			done
+			# $boot will be either any first found partition or first found bootable partition
+			boot=`basename $b`
 
+			if [ "$boot" != "$1" ]; then
+				mountpoint -q /hd && umount /hd
+				dialog --title " Confirm " --defaultno --yesno \
+					"\n Do you want to format the boot partition - /dev/$boot?\n\n Select NO - if your other systems use this partition." 10 70
+				[ $? -eq 0 ] && mkdosfs -n BOOT /dev/$boot
+				while [ 1 ]; do
+					try_mount rw /dev/$boot /hd && break
+					dialog --title " Confirm " --yesno \
+					"\n Cannot mount /dev/$boot\n Do you want to format it?" 8 37
+					[ $? -eq 0 ] && mkdosfs -n BOOT /dev/$boot
+				done
+			fi
+			
+			cp -af /grub /hd
+			rm -f /hd/boot/grub/stage1
+			menulst=/hd/grub/menu.lst
+			sed -i "s@root_part@root (hd$d,$p)@g" $menulst
+			create_winitem $1 $d
+			get_part_info $boot
+			echo "(hd$d) /dev/$disk" > /hd/grub/device.map
+			echo "setup (hd$d) (hd$d,$p)" | grub --device-map /hd/grub/device.map > /dev/tty5
+			[ $(blkid /dev/$boot | grep -c 'TYPE="ext."') -ne 0 ] && sed -i 's/ CREATE_DATA_IMG=1//g' $menulst
+			mountpoint -q /hd && umount /hd
+			try_mount rw /dev/$1 /hd
+			[ $? -ne 0 ] && return 255
+		fi
+	
 	[ -n "$efi" ] && dialog --title " Confirm " --no-label Skip --defaultno --yesno \
 		"\n Do you want to install EFI GRUB2?" 7 39
-	if [ $? -eq 0 ]; then
-		get_part_info $1
-		for i in /sys/block/$disk/$disk*; do
-			[ 0`cat $i/partition` -eq 1 ] && b=$i
-			[ $(blkid /dev/`basename $i` | grep -c vfat) -ne 0 ] && b=$i && break
-		done
-		boot=`basename $b`
-		mountpoint -q /hd && umount /hd
-		dialog --title " Confirm " --defaultno --yesno \
-			"\n Do you want to format the boot partition\n /dev/$boot?" 8 45
-		[ $? -eq 0 ] && mkdosfs -n EFI /dev/$boot
-		while [ 1 ]; do
-			try_mount rw /dev/$boot /hd && break
-			dialog --title " Confirm " --yesno \
-			"\n Cannot mount /dev/$boot\n Do you want to format it?" 8 37
-			[ $? -eq 0 ] && mkdosfs -n EFI /dev/$boot
-		done
-		cp -af /grub2/efi /hd
-		mkdir -p /hd/boot/grub
-		grubcfg=/hd/boot/grub/grub.cfg
-		echo -e "set timeout=6\n\n" > $grubcfg
-		echo -e "menuentry \"Remix OS $VER\" {\n\tsearch --set=root --file /$asrc/kernel\n\tlinux /$asrc/kernel quiet $cmdline \n\tinitrd /$asrc/initrd.img\n}" >> $grubcfg
-		echo -e "menuentry \"Remix OS $VER (DEBUG mode)\" {\n\tsearch --set=root --file /$asrc/kernel\n\tlinux /$asrc/kernel $cmdline DEBUG=2\n\tinitrd /$asrc/initrd.img\n}" >> $grubcfg
-		if [ -e /hd/EFI/Microsoft/Boot/bootmgfw.efi ]; then
-			echo -e "menuentry \"Windows (UEFI)\" {\n\tsearch --set=root --file /EFI/Microsoft/Boot/bootmgfw.efi\n\tchainloader /EFI/Microsoft/Boot/bootmgfw.efi\n}" >> $grubcfg
+		if [ $? -eq 0 ]; then
+			get_part_info $1
+			for i in /sys/block/$disk/$disk*; do
+				[ 0`cat $i/partition` -eq 1 ] && b=$i
+				[ $(blkid /dev/`basename $i` | grep -c 'TYPE="vfat"') -ne 0 ] && b=$i && break
+			done
+			# boot will be either any first found partition or first found vfat partition
+			boot=`basename $b`
+			if [ "$boot" != "$1" ]; then
+				mountpoint -q /hd && umount /hd
+				dialog --title " Confirm " --defaultno --yesno \
+					"\n Do you want to format the boot partition - /dev/$boot?\n\n Select NO - if your other systems use this partition." 9 65
+				[ $? -eq 0 ] && mkdosfs -n EFI /dev/$boot
+				while [ 1 ]; do
+					try_mount rw /dev/$boot /hd && break
+					dialog --title " Confirm " --yesno \
+					"\n Cannot mount /dev/$boot\n Do you want to format it?" 8 37
+					[ $? -eq 0 ] && mkdosfs -n EFI /dev/$boot
+				done
+			fi
+			
+			mkdir -p /hd/efi/$asrc /hd/efi/boot /hd/boot/grub
+			cp -af /grub2/efi/boot/* /hd/efi/$asrc
+			cp -f /grub2/efi/boot/*.efi /hd/efi/boot
+			grubcfg=/hd/boot/grub/grub.cfg
+			sed 's@CMDLINE@root=/dev/ram0 SERIAL=random logo.showlogo=1 androidboot.selinux=permissive@g' /grub2/efi/boot/grub.cfg > $grubcfg
+			# Do NOT create data image if boot partition is in ext FS.
+			[ $(blkid /dev/$boot | grep -c 'TYPE="ext."') -ne 0 ] &&  sed -i 's@ CREATE_DATA_IMG=1@@g' $grubcfg
+			if [ -e /hd/EFI/Microsoft/Boot/bootmgfw.efi ]; then
+				echo -e "\nmenuentry 'Windows' {\n\tsearch --file --no-floppy --set=root /EFI/Microsoft/Boot/bootmgfw.efi\n\tchainloader (\${root})/EFI/Microsoft/Boot/bootmgfw.efi\n}" >> $grubcfg
+			fi
+			mountpoint -q /hd && umount /hd
+			try_mount rw /dev/$1 /hd
 		fi
-		mountpoint -q /hd && umount /hd
-		try_mount rw /dev/$1 /hd
-	fi
-
+	# Should we remove this or rewrite it to add REMOUNT_RW=1 to grub? Currently it creates system.img and leaves no system.sfs to allow for OTA updates + the system.img is not writable anyways.
 	dialog --title " Question " --defaultno --yesno \
 		"\nDo you want to install /system directory as read-write?\n\nMaking /system be read-write is easier for debugging, but it needs more disk space and longer installation time." 10 61
 	instal_rw=$?
@@ -351,12 +410,11 @@ install_to()
 	for s in `du -sk $files | awk '{print $1}'`; do
 		size=$(($size+$s))
 	done
-	try_upgrade hd/$asrc
 	mkdir -p hd/$asrc
 	cd hd/$asrc
 	rm -rf system*
 	( ( cd /; find $files | $CPIO -H newc -o ) | pv -ns ${size}k | ( $CPIO -iud > /dev/null; echo $? > /tmp/result )) 2>&1 \
-		| progress_bar "Installing Android-x86" "Expect to write $size KB..."
+		| progress_bar "Installing Remix OS" "Expect to write $size KB..."
 	result=$((`cat /tmp/result`*255))
 
 	if [ $result -eq 0 ]; then
@@ -377,7 +435,12 @@ install_to()
 				;;
 		esac
 	fi
-
+	
+	REMIXOS_VERSION_INC=`awk -F= '/ro.build.version.incremental/ {print $2}' /android/system/build.prop`
+	# CHECK HERE: Should this be posted in an empty file (>) or added to file (>>)? 
+	echo "ro.remixos.meta.installer=INSTALL_1:$REMIXOS_VERSION_INC" > remixos_meta.sys
+	# CHECK HERE: Remix could be installed to removable storage using the installer so this may not be so good
+	echo "ro.remixos.meta.install_type=hdd" >> remixos_meta.sys
 	dialog --infobox "\n Syncing to disk..." 5 27
 	sync
 
@@ -406,17 +469,18 @@ install_hd()
 
 do_install()
 {
+	# CHECK HERE: Sometimes system.sfs is corrupted and part of files, including binaries are inaccessible - should we add an exception for it?
 	until install_hd; do
 		if [ $retval -eq 255 ]; then
 			dialog --title ' Error! ' --yes-label Retry --no-label Reboot \
-				--yesno '\nInstallation failed! Please check if you have enough free disk space to install Android-x86.' 8 51
+				--yesno '\nInstallation failed! Please check if you have enough free disk space to install Remix OS.' 8 51
 			[ $? -eq 1 ] && rebooting
 		fi
 	done
 
-	[ -n "$VESA" ] || runit="Run Android-x86"
+	[ -n "$VESA" ] || runit="Run Remix OS"
 	dialog --clear --title ' Congratulations! ' \
-		--menu "\n Android-x86 is installed successfully.\n " 11 51 13 \
+		--menu "\n Remix OS is installed successfully.\n " 11 51 13 \
 		"$runit" "" "Reboot" "" 2> $tempfile
 	case "`cat $tempfile`" in
 		Run*)
@@ -441,4 +505,4 @@ do_install()
 			rebooting
 			;;
 	esac
-}
+	}
