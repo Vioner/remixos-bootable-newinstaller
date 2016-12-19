@@ -1,0 +1,26 @@
+default 0
+timeout 5
+
+title Remix OS - Resident mode - all your data and apps are saved
+root_part
+kernel /RemixOS/kernel root=/dev/ram0 SERIAL=random logo.showlogo=1 androidboot.selinux=permissive quiet SRC=RemixOS/ DATA= CREATE_DATA_IMG=1
+initrd /RemixOS/initrd.img
+boot
+
+title Remix OS - Guest mode - No data will be saved after each session
+root_part
+kernel /RemixOS/kernel root=/dev/ram0 SERIAL=random logo.showlogo=1 androidboot.selinux=permissive quiet SRC=RemixOS/ DATA= DATA_IN_MEM=1
+initrd /RemixOS/initrd.img
+boot
+
+title Remix OS - Verbose Mode - Save log files for debugging
+root_part
+kernel /RemixOS/kernel root=/dev/ram0 SERIAL=random logo.showlogo=1 androidboot.selinux=permissive quiet SRC=RemixOS/ DATA= CREATE_DATA_IMG=1 SAVE_LOGS=1
+initrd /RemixOS/initrd.img
+boot
+
+title Remix OS - DEBUG Mode - Debug command line access
+root_part
+kernel /RemixOS/kernel root=/dev/ram0 SERIAL=random logo.showlogo=1 androidboot.selinux=permissive quiet SRC=RemixOS/ DATA= CREATE_DATA_IMG=1 DEBUG=1
+initrd /RemixOS/initrd.img
+boot
